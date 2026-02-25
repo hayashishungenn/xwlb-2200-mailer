@@ -5,6 +5,7 @@
 ## 功能
 
 - 仅邮件推送，不在本仓库保存或更新文稿文件
+- 邮件正文支持 HTML 渲染（标题、链接、列表更易读）
 - 文稿来源：`https://github.com/DuckBurnIncense/xin-wen-lian-bo`
 - 默认定时：每天 22:00（北京时间）
 - 仅需 3 个 Secrets：`EMAIL_SENDER`、`EMAIL_PASSWORD`、`EMAIL_RECEIVERS`
@@ -52,3 +53,4 @@ alice@gmail.com,bob@qq.com
 
 - 在 workflow_dispatch 的输入里填 `news_date`
 - 或设置环境变量 `NEWS_DATE`
+

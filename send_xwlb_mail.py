@@ -1,4 +1,6 @@
+import html
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -24,6 +26,9 @@ SMTP_BY_DOMAIN = {
     "163.com": ("smtp.163.com", 465, True),
     "126.com": ("smtp.126.com", 465, True),
 }
+
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 def require_env(name: str) -> str:
@@ -98,6 +103,100 @@ def resolve_smtp(sender: str) -> tuple[str, int, bool]:
     )
 
 
+def convert_inline_markdown(text: str) -> str:
+    placeholders: list[str] = []
+
+    def replace_link(match: re.Match[str]) -> str:
+        label = html.escape(match.group(1), quote=False)
+        url = html.escape(match.group(2), quote=True)
+        placeholders.append(f'<a href="{url}">{label}</a>')
+        return f"@@LINK{len(placeholders) - 1}@@"
+
+    text_with_links = MARKDOWN_LINK_RE.sub(replace_link, text)
+    escaped = html.escape(text_with_links, quote=False)
+
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
+    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+
+    for i, rendered_link in enumerate(placeholders):
+        escaped = escaped.replace(f"@@LINK{i}@@", rendered_link)
+
+    return escaped
+
+
+def markdown_to_html(markdown: str) -> str:
+    lines = markdown.splitlines()
+    html_parts: list[str] = []
+    in_list = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            close_list()
+            continue
+
+        heading_match = HEADING_RE.match(stripped)
+        if heading_match:
+            close_list()
+            level = len(heading_match.group(1))
+            content = convert_inline_markdown(heading_match.group(2).strip())
+            html_parts.append(f"<h{level}>{content}</h{level}>")
+            continue
+
+        if stripped.startswith("- "):
+            if not in_list:
+                html_parts.append("<ul>")
+                in_list = True
+            item = convert_inline_markdown(stripped[2:].strip())
+            html_parts.append(f"<li>{item}</li>")
+            continue
+
+        if re.fullmatch(r"-{3,}", stripped):
+            close_list()
+            html_parts.append("<hr>")
+            continue
+
+        # Keep embedded HTML from source markdown.
+        if stripped.startswith("<") and ">" in stripped:
+            close_list()
+            html_parts.append(stripped)
+            continue
+
+        close_list()
+        html_parts.append(f"<p>{convert_inline_markdown(stripped)}</p>")
+
+    close_list()
+    return "\n".join(html_parts)
+
+
+def build_html_email(news_date: str, source_url: str, markdown: str) -> str:
+    rendered = markdown_to_html(markdown)
+    source_url_escaped = html.escape(source_url, quote=True)
+
+    return f"""<!doctype html>
+<html lang=\"zh-CN\">
+  <head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  </head>
+  <body style=\"margin:0;padding:16px;background:#f6f8fa;color:#111;font-family:Arial,Helvetica,sans-serif;line-height:1.6;\">
+    <div style=\"max-width:900px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px;\">
+      <p style=\"margin:0 0 12px 0;color:#444;font-size:14px;\">新闻日期: {news_date}</p>
+      <p style=\"margin:0 0 20px 0;color:#444;font-size:14px;\">来源: <a href=\"{source_url_escaped}\">{source_url_escaped}</a></p>
+      {rendered}
+    </div>
+  </body>
+</html>
+"""
+
+
 def send_mail(news_date: str, markdown: str, source_url: str) -> None:
     sender = require_env("EMAIL_SENDER")
     password = require_env("EMAIL_PASSWORD")
@@ -111,12 +210,14 @@ def send_mail(news_date: str, markdown: str, source_url: str) -> None:
         f"来源: {source_url}\n\n"
         f"以下为文稿内容：\n\n{markdown}"
     )
+    html_body = build_html_email(news_date, source_url, markdown)
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
     msg.add_attachment(
         markdown.encode("utf-8"),
         maintype="text",
