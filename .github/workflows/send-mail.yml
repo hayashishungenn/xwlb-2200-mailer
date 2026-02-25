@@ -1,0 +1,37 @@
+name: Send XWLB Daily Mail
+
+on:
+  workflow_dispatch:
+    inputs:
+      news_date:
+        description: "Optional date (YYYYMMDD). Empty means today in Asia/Shanghai"
+        required: false
+        type: string
+  schedule:
+    # 北京时间每天 22:00 (UTC+8) => UTC 14:00
+    - cron: '0 14 * * *'
+
+jobs:
+  send-mail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve news date
+        id: date
+        env:
+          INPUT_NEWS_DATE: ${{ inputs.news_date }}
+        run: |
+          if [ -n "$INPUT_NEWS_DATE" ]; then
+            echo "date=$INPUT_NEWS_DATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "date=$(TZ='Asia/Shanghai' date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send mail
+        env:
+          NEWS_DATE: ${{ steps.date.outputs.date }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
+        run: python3 send_xwlb_mail.py
